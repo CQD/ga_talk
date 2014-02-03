@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+
+</head>
+<body>
+
+<label for='width'>Width: </label><select id='width'>
+<option value='1'>1</option>
+<option value='2' selected='selected'>2</option>
+<option value='3'>3</option>
+<option value='4'>4</option>
+<option value='5'>5</option>
+<option value='6'>6</option>
+<option value='7'>7</option>
+<option value='8'>8</option>
+<option value='9'>9</option>
+</select>
+
+<br>
+
+<label for='height'>Height: </label><select id='height'>
+<option value='1'>1</option>
+<option value='2' selected='selected'>2</option>
+<option value='3'>3</option>
+<option value='4'>4</option>
+<option value='5'>5</option>
+<option value='6'>6</option>
+<option value='7'>7</option>
+<option value='8'>8</option>
+<option value='9'>9</option>
+</select>
+
+<hr>
+
+<div id='tableWrapper'></div>
+<button id='cal'>Calculate</button>
+<hr>
+
+<pre id='msg'></pre>
+<!--[if lt IE 9]>
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+<![endif]-->
+
+<!--[if gte IE 9]><!-->
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/2.1.0/jquery.min.js"></script>
+<!--<![endif]-->
+
+<script>
+(function($,w){
+var updateTable = function(){
+  var valueStyle = {'background-color':'#ddd','text-align':'center'};
+  var fldStyle = {'border':'1px solid #ccc','text-align':'center'};
+
+  var maxh = parseInt($('#height option:selected').val())+1;
+  var maxw = parseInt($('#width option:selected').val())+1;
+  var $tbl = $('<table></table>');
+  for(var h=0; h<=maxh; h++){
+    var $tr = $('<tr></tr>');
+    for(var w=0; w<=maxw; w++){
+      var hEdge = (h==maxh || h==0);
+      var wEdge = (w==maxw || w==0);
+      var $td = $('<td></td>').attr('id', 'tbl_'+h+'_'+w);
+      if (!hEdge && !wEdge) {
+        $td.css(valueStyle);
+      } else if(hEdge && wEdge) {
+      } else {
+        var hf = (h==0) ? 't' : (h==maxh) ? 'b' : h;
+        var wf = (w==0) ? 'l' : (w==maxw) ? 'r' : w;
+        var $input = $('<input>').attr('id', 'in_'+hf+'_'+wf).attr({size:10}).css(fldStyle);
+        $td.append($input);
+      }
+      $tr.append($td);
+    }
+    $tbl.append($tr);
+  }
+  var tw = $('#tableWrapper');
+  tw.children().remove();
+  tw.append($tbl);
+};
+
+function gaConfig(){
+  // config
+  childCount = 100;
+  maxTime = 10000; //ms
+  mutRate = 0.19;
+  deathRate = 0.6;
+  reserveRate = 0.15;
+}
+
+
+function gaInit(){
+  // get input
+  hSize = parseInt($('#height option:selected').val());
+  wSize = parseInt($('#width option:selected').val());
+  maxScore = hSize*2+wSize*2;
+  hRe={'l':{},'r':{}}, wRe={'t':{},'b':{}};
+
+  for (var w=1;w<=wSize; w++) {
+    wRe['t'][w] = makeRegExp('in_t_'+w);
+    wRe['b'][w] = makeRegExp('in_b_'+w);
+  }
+
+  for (var h=1;h<=hSize; h++) {
+    hRe['l'][h] = makeRegExp('in_'+h+'_l');
+    hRe['r'][h] = makeRegExp('in_'+h+'_r');
+  }
+
+  // init Genes
+  g=0;
+  geneLen = hSize*wSize;
+  genes = new Array();
+  for (var idx=0; idx<childCount; idx++) {
+    genes[idx] = genGene(geneLen);
+  }
+
+  // time
+  startTime = new Date();
+}
+
+var g = 0;
+function gaLoop(){
+  g++;
+
+  // score
+  for(var idx=0; idx<childCount; idx++){
+    var score =  calculateScore(genes[idx], hSize, wSize, hRe, wRe);
+    genes[idx].score = score;
+  }
+
+  // sorting
+  genes = genes.sort(function(x,y){
+    return y.score-x.score;
+  });
+  render(genes[0], wSize, hSize); // render current best gene
+
+  // check for termination
+  var now = new Date();
+  if (genes[0].score>=maxScore) {
+    render(genes[0], wSize, hSize); // render current best gene
+    var msg =
+      'Solution found at g'+g+
+      "\nTime used: "+(now-startTime)*0.001;
+    showMsg(msg);
+    return;
+  } else if (now-startTime>maxTime) {
+    var msg =
+      'Failed to find solution after '+g+' generations!'
+      "\nTime used: "+(now-startTime)*0.001;
+    showMsg(msg);
+    return;
+  }
+  
+  // generate next generation
+  var reserveLimit = childCount*reserveRate;
+  var deathLimit = childCount-deathRate*childCount;
+  var nextGen = new Array(childCount);
+  for(var idx=0; idx<childCount; idx++){
+    if (idx>=deathLimit) {
+      // least performed genes are replaced with new gene
+      nextGen[idx] = genGene(geneLen);
+
+    } else if (idx<=reserveLimit){
+      // best performed genes are reserved
+      nextGen[idx] = genes[idx];
+    } else {
+      // middle grade gene are replaced with childs of best genes
+      var father = genes[Math.floor(Math.random()*reserveLimit)];
+      var mother = genes[Math.floor(Math.random()*childCount)];
+      nextGen[idx] = crossover(father, mother, geneLen, mutRate);
+    }
+
+  }
+
+  genes = nextGen;
+
+  // do next loop
+  setTimeout(gaLoop, 0);
+}
+
+function makeRegExp(id){
+  var txt = $('#'+id).val();
+  return (''==txt || !txt) ? null : new RegExp('^'+txt.trim()+'$');
+}
+
+//var genepool = '!"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~';
+genepool = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+//var genepool = 'aAbB';
+genepool = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function genGene(size){
+  var gene = new Array(size);
+  for (var idx=0; idx<size; idx++) {
+    var foo = Math.floor(Math.random()*genepool.length);
+    gene[idx] = genepool[foo];
+  }
+  return gene;
+}
+
+
+function calculateScore(gene, hSize, wSize, hre, wre){
+    var score = 0;
+    // vertical score
+    for(var w=0; w<wSize; w++){
+      // create matching string
+      var foo = new Array();
+      for (var h=0; h<hSize; h++) {
+          foo.push(gene[w+wSize*h]);
+      }
+      var str = foo.join('');
+
+      var t = wre['t'][w+1];
+      if(!t || t.test(str)){
+        score++;
+      }
+
+      var b = wre['b'][w+1];
+      if(!b || b.test(str)){
+        score++;
+      }
+    }
+
+    // horizontal score
+    for(var h=0; h<hSize; h++){
+      // create matching string
+      var foo = new Array();
+      for (var w=0; w<wSize; w++) {
+          foo.push(gene[w+wSize*h]);
+      }
+      var str = foo.join('');
+
+      var l = hre['l'][h+1];
+      if(!l || l.test(str)){
+        score++;
+      }
+
+      var r = hre['r'][h+1];
+      if(!r || r.test(str)){
+        score++;
+      }
+    }
+
+    return score;
+}
+
+function crossover(a, b, geneLen, mutRate) {
+  var c = [];
+  for(var i=geneLen-1; i>=0; i--){
+    var rnd = Math.random();
+    if (rnd<mutRate) {
+      c[i] = genepool[Math.floor(Math.random()*genepool.length)];
+    } else if(rnd>0.5+mutRate/2){
+      c[i] = a[i];
+    } else {
+      c[i] = b[i];
+    }
+  }
+  return c;
+}
+
+function render(gene, wSize, hSize){
+  for(var h=0; h<hSize; h++){
+    var offset = wSize*h;
+    for(var w=0; w<wSize; w++){
+      $('#tbl_'+(h+1)+'_'+(w+1)).text(gene[w+offset]);
+    }
+  }
+}
+
+var $_msg = $('#msg');
+function showMsg (msg){
+    $_msg.text(msg);
+}
+$(function(){
+  updateTable();
+  gaConfig();
+  $('#width').on('change', updateTable);
+  $('#height').on('change', updateTable);
+  $('#cal').on('touchstart click', function(e){
+    e.preventDefault();// there will be a double tap bug if this line is omited
+    gaInit();
+    showMsg('Calculating...');
+    gaLoop();
+  });
+});
+
+})($,window);
+</script>
+</body>
+</html>
