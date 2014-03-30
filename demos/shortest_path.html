@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style type="text/css">
+body{border:none; margin:none;}
+.block{
+  float:left;
+  border: 1px solid #ccc;
+  padding: 10px;
+  margin: 5px;
+}
+canvas{
+  margin: 3px;
+  border: 1px solid #ccc;
+}
+</style>
+</head>
+<body>
+
+<div class='block'>
+<div id="map">
+</div>
+<hr>
+<button id='clear'>清除</button>
+<button id='cal'>計算</button>
+<hr>
+<div id='msg'>請開啟 Javascript 功能</div>
+</div>
+
+
+<!--[if lt IE 9]>
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+<![endif]-->
+
+<!--[if gte IE 9]><!-->
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/2.1.0/jquery.min.js"></script>
+<!--<![endif]-->
+
+<script>
+
+(function($,w){
+
+/**
+ * 設定各種執行參數
+ * 本來想做成畫面輸入，不過因為太懶了所以先寫死 global scope 變數...
+ */
+function getConfig(){
+  // 地圖大小
+  xSize = 15;
+  ySize = 15;
+
+  // 顯示相關
+  genesToShow = 10; // 要在畫面上顯示多少筆運算中的基因
+  gridSize = 12;    // 一個 grid 大小是幾 px
+  pointSize = 8;    // 路徑點的大小
+
+  // GA
+  childCount = 200;
+  maxTime = 3000; //ms
+  mutRate = 0.39;
+  deathRate = 0.3;
+  reserveRate = 0.;
+}
+
+
+/**
+ * 初始化GA相關變數
+ *
+ * - 取得路徑點資訊
+ * - 產生第一代基因
+ * - 開始計時
+ */
+function gaInit(){
+  //////////////////////////////////////
+  // 取得路徑點資訊
+  //////////////////////////////////////
+  $wayPoints = $('#map :checked');      // 取得所有被勾選的 checkbox
+  pointNum = $wayPoints.length;         // 總共有這麼多點
+
+  // 把所有的點坐標撈出來，放進一個陣列中
+  points = [];
+  $wayPoints.each(function(){
+    var val = $(this).val().split(","); // value='x,y' => [x,y]
+    points.push(val);
+  });
+  
+  //////////////////////////////////////
+  // 產生第一代基因
+  //////////////////////////////////////
+  g=0;
+  geneLen = pointNum-1;
+  genes = [];
+  for (var idx=0; idx<childCount; idx++) {
+    genes[idx] = genGene(geneLen);
+  }
+
+  //////////////////////////////////////
+  // 計時與設定 flag
+  //////////////////////////////////////
+  startTime = new Date();
+}
+
+/**
+ * GA 主迴圈邏輯
+ */
+function gaLoop(){
+  g++;
+
+  // 計算每個基因的「分數」
+  for(var idx=0; idx<childCount; idx++){
+    var score =  calculateScore(genes[idx]);
+    genes[idx].score = score;
+  }
+
+  // 把每組基因依照分數排序，高分的在前面
+  genes = genes.sort(function(x,y){
+    return y.score-x.score;
+  });
+
+  // 把最好的基因們印到畫面上
+  for (var i=0; i<genesToShow; i++) {
+    render(genes[i], i);
+  }
+
+  // 檢查截止條件
+  var now = new Date();
+  if (now-startTime>maxTime) {
+    // 達到預定執行時間，顯示結果訊息並停止執行
+    var msg = '經過 '+g+' 個世代，找出的最佳解答為<br>';
+    var pointsCopy = points.slice(0); // 複製 points 陣列 // TODO 複製一個陣列的做法需要不少記憶體操作，這樣會比較慢...
+    for(var i=0; i<genes[0].length; i++){
+      var pointIdx = genes[0][i];
+      var point = pointsCopy[pointIdx];
+      msg += "["+point[0]+","+point[1]+"]";
+      // 如果太長要斷行
+      if (i%5==0 && i>0) {
+        msg += '<br>';
+      }
+      pointsCopy.splice(pointIdx, 1);
+    }
+    msg += "["+pointsCopy[0][0]+","+pointsCopy[0][1]+"]";
+    showMsg(msg);
+    return;
+  }
+  
+  // 產生下一代
+  var reserveLimit = childCount*reserveRate;
+  var deathLimit = childCount-deathRate*childCount;
+  var nextGen = new Array(childCount);
+  for(var idx=0; idx<childCount; idx++){
+    if (idx>=deathLimit) {
+      // 表現最差的基因用隨機產生的新基因取代
+      nextGen[idx] = genGene(geneLen);
+
+    } else if (idx<=reserveLimit){
+      // 表現最好的基因保留
+      nextGen[idx] = genes[idx];
+    } else {
+      // 普通等級的基因用交配出來的後代取代
+      var father = genes[Math.floor(Math.random()*reserveLimit)];
+      var mother = genes[Math.floor(Math.random()*childCount)];
+      nextGen[idx] = crossover(father, mother, mutRate);
+    }
+
+  }
+
+  genes = nextGen;
+
+  // 跑下個迴圈
+  // 用 for 一直跑的話 main thread 沒機會執行，界面會凍住
+  // setTimeout() 可以讓 main thread 取得執行機會，避免界面凍住
+  setTimeout(gaLoop, 0);
+}
+
+
+/**
+ * 產生隨機基因
+ * 基因的編碼意義為：
+ *   第一碼 = 第一步要經過路徑點清單中的第幾個點
+ *   第二碼 = 拔掉第一步經過的點之後，要經過路徑點清單中的第幾個點
+ *   第三碼 = 拔掉第二步經過的點之後，要經過路徑點清單中的第幾個點
+ *   以下類推
+ * 
+ * 編碼是從 0 起算，而非從 1 起算
+ */
+function genGene(size){
+  var gene = [];
+  for (var idx=0; idx<size; idx++) {
+    var foo = Math.floor(Math.random()*(size-idx));
+    gene.push(foo);
+  }
+  return gene;
+}
+
+/**
+ * 計算基因的分數。
+ * 經過的距離越短，則分數越高。
+ */
+function calculateScore(gene){
+    var score = 0;
+
+    var pointsCopy = points.slice(0); // 複製 points 陣列 // TODO 複製一個陣列的做法需要不少記憶體操作，這樣會比較慢...
+    var lastPoint = null;
+    for (var geneIdx=0; geneIdx<geneLen; geneIdx++) {
+      // 先把前一次操作中選到的點從清單中移除
+      if (geneIdx>0) {
+        var pastPointIdx = gene[geneIdx-1];
+        pointsCopy.splice(pastPointIdx, 1);
+      }
+      // 挑出現在的點
+      var currPointIdx = gene[geneIdx];
+      var thisPoint = pointsCopy[currPointIdx];
+
+      // 計算移動距離
+      // 分數要扣除移動距離，造成移動越遠分數越低的效果
+      if (lastPoint) {
+        var xDist = lastPoint[0]-thisPoint[0];
+        var yDist = lastPoint[1]-thisPoint[1];
+        var dist = xDist*xDist + yDist*yDist; // 算距離的時候不用開根號了，不影響分數相對順序
+        score -= dist;
+      }
+
+      // 把現在的點標成「上個點」，供下個迴圈計算距離用
+      lastPoint = thisPoint;
+    }
+
+    return score;
+}
+
+/**
+ * 讓兩個基因交配，並引入突變
+ */
+function crossover(a, b, mutRate) {
+  var c = [];
+  for(var i=geneLen-1; i>=0; i--){
+    var rnd = Math.random();
+    if (rnd<mutRate) {
+      // 基因突變
+      c[i] = Math.floor(Math.random()*(geneLen-i));
+    } else if(rnd>0.5+mutRate/2){
+      // 選擇父方基因
+      c[i] = a[i];
+    } else {
+      // 選擇母方基因
+      c[i] = b[i];
+    }
+  }
+  return c;
+}
+
+/**
+ * 把這組基因繪製在畫面上
+ */
+function render(gene, idx){
+  var c = ctxs[idx];
+  var w = c.canvas.width;
+  var h = c.canvas.height;
+
+  // 清空內容
+  c.fillStyle = '#fff';
+  c.fillRect(0, 0, w, h);
+
+  // 畫格線
+  c.strokeStyle = '#ddd';
+  for(var x=gridSize+0.5; x<w; x+=gridSize){
+    c.beginPath();
+    c.moveTo(x, 0);
+    c.lineTo(x, h);
+    c.stroke();
+  }
+  for(var y=gridSize+0.5; y<h; y+=gridSize){
+    c.beginPath();
+    c.moveTo(0, y);
+    c.lineTo(w, y);
+    c.stroke();
+  }
+
+  // 畫路徑點
+  c.fillStyle = 'rgba(0,0,255,0.6)';
+  for(var i=0; i<points.length; i++){
+    var currPoint = points[i];
+    var x = currPoint[0]*gridSize;
+    var y = currPoint[1]*gridSize;
+    c.fillRect(x-pointSize/2, y-pointSize/2, pointSize, pointSize);
+  }
+
+  // 畫路徑
+  c.strokeStyle = '#f00';
+  var pointsCopy = points.slice(0); // 複製 points 陣列 // TODO 複製一個陣列的做法需要不少記憶體操作，這樣會比較慢...
+  c.beginPath();
+  for(var geneIdx=0; geneIdx<geneLen; geneIdx++){
+    var currPointIdx = gene[geneIdx];
+    var currPoint = pointsCopy[currPointIdx];
+    var x = currPoint[0]*gridSize;
+    var y = currPoint[1]*gridSize;
+    
+    if (geneIdx==0) {
+      c.moveTo(x, y);
+    } else {
+      c.lineTo(x, y);
+    }
+
+    pointsCopy.splice(currPointIdx, 1);
+  }
+
+  var x = pointsCopy[0][0]*gridSize;
+  var y = pointsCopy[0][1]*gridSize;
+  c.lineTo(x, y);
+  c.stroke();
+}
+
+/**
+ * 繪製設定各個點位置用的 checkbox 陣列
+ */
+var printMap = function(xSize, ySize){
+  $map = $('#map');
+  $map.children().remove();
+  for(var y=0; y<ySize; y++){
+    for(var x=0; x<xSize; x++){
+      $map.append($("<input type='checkbox' value='"+x+","+y+"'>"));
+    }
+    $map.append($("<br>"));
+  }
+}
+
+/**
+ * 在畫面上顯示文字訊息
+ */
+function showMsg (msg){
+    $_msg.html(msg);
+}
+var $_msg = $('#msg');
+
+
+/**
+ * 準備用來顯示基因用的 canvas 們
+ */
+function prepareCanvas(num){
+  var $body = $('body');
+
+  // 清空舊 canvas
+  $('canvas').remove();
+
+  //重新做出新的 canvas 們，並把 canvas 的 contex 們記錄在陣列中備用
+  ctxs = [];
+  for(var i=0; i<num; i++){
+    var $c = $('<canvas id="rslt'+i+'">')
+      .attr('width', xSize*gridSize)
+      .attr('height', ySize*gridSize);
+    $body.append($c);
+
+    var ctx = $c[0].getContext('2d');
+    ctxs.push(ctx);
+  }
+}
+
+
+/////////////////////////
+// 畫面載入後要做這些事情
+/////////////////////////
+
+getConfig();                  // 邏輯開始之前先取得各種執行參數
+printMap(xSize, ySize);       // 把設定路徑點位置的地圖做出來
+prepareCanvas(genesToShow);   // 準備用來顯示基因用的 canvas 們
+showMsg('請設定位置');
+
+// 按下計算按鈕要做這些事
+$('#cal').on('touchstart click', function(e){
+  e.preventDefault();// there will be a double tap bug if this line is omited
+  gaInit();
+  showMsg('計算中...');
+  gaLoop();
+});
+
+// 按下清除按鈕要做這些事
+$('#clear').on('touchstart click', function(e){
+  e.preventDefault();// there will be a double tap bug if this line is omited
+  printMap(xSize, ySize);
+  showMsg('地圖已清除，請設定位置');
+});
+
+
+})($,window);
+
+/********************************************\
+  我肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓
+  肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓肚
+  子好餓肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓肚子
+  好餓肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓肚子好
+  餓肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓肚子好餓
+      / 
+    \Ｏ/
+     口
+     ||
+\********************************************/
+
+</script>
+</body>
+</html>
